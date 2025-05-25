@@ -1,0 +1,273 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Excel Viewer Pro</title>
+  <script src="https://cdn.jsdelivr.net/npm/xlsx/dist/xlsx.full.min.js"></script>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&display=swap" rel="stylesheet">
+  <style>
+    * {
+      box-sizing: border-box;
+    }
+    body {
+      margin: 0;
+      font-family: 'Inter', sans-serif;
+      background: linear-gradient(135deg, #c2e9fb, #a1c4fd);
+      padding: 40px;
+      color: #333;
+    }
+    .container {
+      max-width: 1200px;
+      margin: auto;
+      background: rgba(255, 255, 255, 0.3);
+      border-radius: 20px;
+      padding: 30px;
+      backdrop-filter: blur(20px);
+      box-shadow: 0 20px 40px rgba(0, 0, 0, 0.1);
+      animation: fadeIn 1s ease;
+    }
+    @keyframes fadeIn {
+      from { opacity: 0; transform: translateY(20px); }
+      to { opacity: 1; transform: translateY(0); }
+    }
+    h2 {
+      text-align: center;
+      font-size: 28px;
+      margin-bottom: 20px;
+      color: #111827;
+    }
+    .top-controls {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 15px;
+      justify-content: center;
+      margin-bottom: 25px;
+    }
+    input[type="file"]::file-selector-button {
+      background: linear-gradient(to right, #6a11cb, #2575fc);
+      color: white;
+      border: none;
+      padding: 10px 18px;
+      border-radius: 8px;
+      font-size: 15px;
+      cursor: pointer;
+    }
+    input[type="file"]::file-selector-button:hover {
+      transform: scale(1.05);
+      box-shadow: 0 0 8px rgba(0,0,0,0.1);
+    }
+    select, input[type="text"] {
+      padding: 10px;
+      border-radius: 10px;
+      border: 1px solid #ccc;
+      font-size: 15px;
+      min-width: 250px;
+      background: white;
+    }
+    select:focus, input:focus {
+      border-color: #6366f1;
+      box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.2);
+      outline: none;
+    }
+    .actions {
+      text-align: center;
+      margin-top: 15px;
+    }
+    button {
+      background: #10b981;
+      color: white;
+      padding: 10px 16px;
+      border: none;
+      border-radius: 8px;
+      font-weight: 600;
+      cursor: pointer;
+      margin: 5px;
+    }
+    button:hover {
+      background: #059669;
+    }
+    table {
+      width: 100%;
+      border-collapse: collapse;
+      margin-top: 20px;
+    }
+    th, td {
+      border: 1px solid #ddd;
+      padding: 10px;
+      text-align: left;
+    }
+    th {
+      background: #4f46e5;
+      color: white;
+      position: sticky;
+      top: 0;
+      z-index: 2;
+    }
+    tr:nth-child(even) td {
+      background-color: rgba(0, 0, 0, 0.03);
+    }
+    tr.hide {
+      display: none;
+    }
+    .table-scroll {
+      max-height: 500px;
+      overflow: auto;
+    }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <h2>📈 Excel Viewer Pro with Merged Cells + Export</h2>
+
+    <div class="top-controls">
+      <input type="file" id="excelFile" accept=".xlsx, .xls">
+      <select id="sheetSelector" style="display:none;"></select>
+      <input type="text" id="searchInput" placeholder="🔍 Search...">
+    </div>
+
+    <div class="actions">
+      <button id="exportCSV">⬇️ Export as CSV</button>
+      <button id="clearData">🩹 Clear Table</button>
+    </div>
+
+    <div class="table-scroll" id="tableContainer"></div>
+  </div>
+
+  <script>
+    const excelFileInput = document.getElementById('excelFile');
+    const searchInput = document.getElementById('searchInput');
+    const sheetSelector = document.getElementById('sheetSelector');
+    const tableContainer = document.getElementById('tableContainer');
+    const exportCSV = document.getElementById('exportCSV');
+    const clearData = document.getElementById('clearData');
+
+    let workbookGlobal = null;
+    let jsonDataGlobal = [];
+
+    excelFileInput.addEventListener('change', (e) => {
+      const file = e.target.files[0];
+      if (!file) return;
+
+      const reader = new FileReader();
+      reader.onload = (evt) => {
+        const data = new Uint8Array(evt.target.result);
+        const workbook = XLSX.read(data, { type: 'array' });
+        workbookGlobal = workbook;
+
+        const sheetNames = workbook.SheetNames;
+        sheetSelector.innerHTML = sheetNames.map(name => `<option value="${name}">${name}</option>`).join('');
+        sheetSelector.style.display = 'inline-block';
+
+        renderSheet(sheetNames[0]);
+      };
+      reader.readAsArrayBuffer(file);
+    });
+
+    sheetSelector.addEventListener('change', () => {
+      renderSheet(sheetSelector.value);
+    });
+
+    function detectHeaderRow(sheet, range) {
+      const possibleHeaders = ["name", "father", "address", "contact", "s.no", "dob", "mobile"];
+      for (let R = range.s.r; R <= Math.min(range.e.r, 10); R++) {
+        let matchCount = 0;
+        for (let C = range.s.c; C <= range.e.c; C++) {
+          const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+          const cell = sheet[cellRef];
+          if (!cell || typeof cell.v !== 'string') continue;
+          const val = cell.v.toLowerCase();
+          if (possibleHeaders.some(header => val.includes(header))) matchCount++;
+        }
+        if (matchCount >= 2) return R; // Found likely header row
+      }
+      return range.s.r; // fallback to first row
+    }
+
+    function renderSheet(sheetName) {
+      const sheet = workbookGlobal.Sheets[sheetName];
+      const range = XLSX.utils.decode_range(sheet['!ref']);
+      const merges = sheet['!merges'] || [];
+      const headerRow = detectHeaderRow(sheet, range);
+
+      const mergeMap = {};
+      merges.forEach(merge => {
+        const start = `${merge.s.r}_${merge.s.c}`;
+        mergeMap[start] = {
+          rowspan: merge.e.r - merge.s.r + 1,
+          colspan: merge.e.c - merge.s.c + 1
+        };
+        for (let r = merge.s.r; r <= merge.e.r; r++) {
+          for (let c = merge.s.c; c <= merge.e.c; c++) {
+            if (r !== merge.s.r || c !== merge.s.c) {
+              mergeMap[`${r}_${c}`] = "skip";
+            }
+          }
+        }
+      });
+
+      let html = "<table><tbody>";
+      for (let R = range.s.r; R <= range.e.r; ++R) {
+        html += `<tr${R === headerRow ? ' class="header-row"' : ''}>`;
+        for (let C = range.s.c; C <= range.e.c; ++C) {
+          const cellRef = XLSX.utils.encode_cell({ r: R, c: C });
+          const key = `${R}_${C}`;
+          if (mergeMap[key] === "skip") continue;
+
+          const cell = sheet[cellRef];
+          const value = cell ? cell.v : "";
+          const merge = mergeMap[key];
+          let tag = R === headerRow ? 'th' : 'td';
+          let td = `<${tag}`;
+
+          if (merge) {
+            if (merge.rowspan > 1) td += ` rowspan="${merge.rowspan}"`;
+            if (merge.colspan > 1) td += ` colspan="${merge.colspan}"`;
+          }
+
+          td += `>${value}</${tag}>`;
+          html += td;
+        }
+        html += "</tr>";
+      }
+      html += "</tbody></table>";
+
+      tableContainer.innerHTML = html;
+      jsonDataGlobal = tableContainer.querySelectorAll('tbody tr');
+    }
+
+    searchInput.addEventListener('input', () => {
+      const searchTerm = searchInput.value.toLowerCase();
+      if (!jsonDataGlobal.length) return;
+
+      jsonDataGlobal.forEach(row => {
+        const isHeader = row.classList.contains('header-row');
+        if (isHeader) {
+          row.classList.remove('hide');
+          return;
+        }
+        const cells = Array.from(row.cells).map(td => td.textContent.toLowerCase());
+        const match = cells.some(text => text.includes(searchTerm));
+        row.classList.toggle('hide', !match);
+      });
+    });
+
+    exportCSV.addEventListener('click', () => {
+      if (!workbookGlobal || !sheetSelector.value) return;
+      const ws = workbookGlobal.Sheets[sheetSelector.value];
+      const csv = XLSX.utils.sheet_to_csv(ws);
+      const blob = new Blob([csv], { type: 'text/csv;charset=utf-8;' });
+      const url = URL.createObjectURL(blob);
+      const a = document.createElement('a');
+      a.href = url;
+      a.download = `${sheetSelector.value}.csv`;
+      a.click();
+    });
+
+    clearData.addEventListener('click', () => {
+      tableContainer.innerHTML = '';
+      searchInput.value = '';
+      sheetSelector.style.display = 'none';
+    });
+  </script>
+</body>
+</html>
